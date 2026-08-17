@@ -1,1 +1,10 @@
-/tests/build/
+*.a
+*.o
+*~
+.DS_Store
+.idea/
+.vscode/
+/basic
+/custom_tuning
+/examples/basic
+/examples/custom_tuning

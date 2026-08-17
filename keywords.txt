@@ -1,8 +1,0 @@
-kalman_filter	KEYWORD1
-kalman_filter_init	KEYWORD2
-kalman_filter_init_with_noise	KEYWORD2
-kalman_filter_set_noise	KEYWORD2
-kalman_filter_reset	KEYWORD2
-kalman_filter_update	KEYWORD2
-kalman_filter_value	KEYWORD2
-KALMAN_FILTER_OK	LITERAL1
