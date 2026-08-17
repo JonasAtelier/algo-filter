@@ -45,8 +45,6 @@ static void test_default_workflow(void)
 		      kalman_filter_update(&filter, 12.0f, &result));
 	EXPECT_NEAR(11.004975f, result, 0.00001f);
 	EXPECT_NEAR(0.5024876f, filter.covariance, 0.000001f);
-	EXPECT_STATUS(KALMAN_FILTER_OK,
-		      kalman_filter_value(&filter, &result));
 	EXPECT_TRUE(result == filter.estimate);
 }
 
@@ -69,19 +67,19 @@ static void test_convergence(void)
 	EXPECT_TRUE(filter.covariance >= 0.0f);
 }
 
-static void test_reset_and_tuning(void)
+static void test_reset_preserves_tuning(void)
 {
 	struct kalman_filter filter;
 	float result;
 
-	EXPECT_STATUS(KALMAN_FILTER_OK, kalman_filter_init(&filter));
+	EXPECT_STATUS(KALMAN_FILTER_OK,
+		      kalman_filter_init_with_noise(&filter, 0.0f, 2.0f));
 	EXPECT_STATUS(KALMAN_FILTER_OK,
 		      kalman_filter_update(&filter, 5.0f, &result));
-	EXPECT_STATUS(KALMAN_FILTER_OK,
-		      kalman_filter_set_noise(&filter, 0.0f, 2.0f));
 	EXPECT_STATUS(KALMAN_FILTER_OK, kalman_filter_reset(&filter));
-	EXPECT_STATUS(KALMAN_FILTER_ERR_NOT_INITIALIZED,
-		      kalman_filter_value(&filter, &result));
+	EXPECT_TRUE(filter.process_noise == 0.0f);
+	EXPECT_TRUE(filter.measurement_noise == 2.0f);
+	EXPECT_TRUE(filter.has_estimate == 0);
 	EXPECT_STATUS(KALMAN_FILTER_OK,
 		      kalman_filter_update(&filter, 42.0f, &result));
 	EXPECT_TRUE(result == 42.0f);
@@ -111,14 +109,13 @@ static void test_invalid_arguments(void)
 	EXPECT_STATUS(KALMAN_FILTER_ERR_NULL,
 		      kalman_filter_update(&filter, 1.0f, NULL));
 	EXPECT_STATUS(KALMAN_FILTER_ERR_INVALID_VALUE,
-		      kalman_filter_set_noise(&filter, 1.0f, -1.0f));
+		      kalman_filter_init_with_noise(&filter, -1.0f, 1.0f));
 	EXPECT_TRUE(filter_equals(&filter, &original));
 	EXPECT_STATUS(KALMAN_FILTER_ERR_INVALID_VALUE,
 		      kalman_filter_update(&filter, 1.0f,
 					   &filter.estimate));
 	EXPECT_TRUE(filter_equals(&filter, &original));
-	EXPECT_STATUS(KALMAN_FILTER_ERR_INVALID_VALUE,
-		      kalman_filter_value(&filter, &filter.covariance));
+	EXPECT_STATUS(KALMAN_FILTER_ERR_NULL, kalman_filter_reset(NULL));
 	EXPECT_TRUE(filter_equals(&filter, &original));
 }
 
@@ -156,7 +153,7 @@ int main(void)
 {
 	test_default_workflow();
 	test_convergence();
-	test_reset_and_tuning();
+	test_reset_preserves_tuning();
 	test_invalid_arguments();
 	test_invalid_state();
 	test_extreme_finite_values();

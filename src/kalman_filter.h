@@ -38,20 +38,12 @@ kalman_filter_init_with_noise(struct kalman_filter *filter,
 			      float measurement_noise);
 
 enum kalman_filter_status
-kalman_filter_set_noise(struct kalman_filter *filter,
-			float process_noise,
-			float measurement_noise);
-
-enum kalman_filter_status
 kalman_filter_reset(struct kalman_filter *filter);
 
 enum kalman_filter_status
 kalman_filter_update(struct kalman_filter *filter,
 		     float measurement,
 		     float *result);
-
-enum kalman_filter_status
-kalman_filter_value(const struct kalman_filter *filter, float *result);
 
 #ifdef __cplusplus
 }

@@ -76,29 +76,6 @@ kalman_filter_init_with_noise(struct kalman_filter *filter,
 }
 
 enum kalman_filter_status
-kalman_filter_set_noise(struct kalman_filter *filter,
-			float process_noise,
-			float measurement_noise)
-{
-	enum kalman_filter_status status;
-
-	if (!filter)
-		return KALMAN_FILTER_ERR_NULL;
-
-	if (!kalman_filter_is_valid(filter))
-		return KALMAN_FILTER_ERR_NOT_INITIALIZED;
-
-	status = kalman_filter_check_noise(process_noise, measurement_noise);
-	if (status != KALMAN_FILTER_OK)
-		return status;
-
-	filter->process_noise = process_noise;
-	filter->measurement_noise = measurement_noise;
-
-	return KALMAN_FILTER_OK;
-}
-
-enum kalman_filter_status
 kalman_filter_reset(struct kalman_filter *filter)
 {
 	if (!filter)
@@ -175,26 +152,6 @@ kalman_filter_update(struct kalman_filter *filter,
 	next.covariance = (float)covariance;
 	*filter = next;
 	*result = next.estimate;
-
-	return KALMAN_FILTER_OK;
-}
-
-enum kalman_filter_status
-kalman_filter_value(const struct kalman_filter *filter, float *result)
-{
-	if (!filter || !result)
-		return KALMAN_FILTER_ERR_NULL;
-
-	if (kalman_filter_result_aliases(filter, result))
-		return KALMAN_FILTER_ERR_INVALID_VALUE;
-
-	if (!kalman_filter_is_valid(filter))
-		return KALMAN_FILTER_ERR_NOT_INITIALIZED;
-
-	if (!filter->has_estimate)
-		return KALMAN_FILTER_ERR_NOT_INITIALIZED;
-
-	*result = filter->estimate;
 
 	return KALMAN_FILTER_OK;
 }
