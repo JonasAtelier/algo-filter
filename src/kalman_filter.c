@@ -2,6 +2,7 @@
 
 #include <float.h>
 #include <math.h>
+#include <stddef.h>
 
 #define KALMAN_FILTER_MARKER UINT32_C(0x4b464c54)
 #define KALMAN_FILTER_INITIAL_COVARIANCE 1.0f
@@ -23,10 +24,27 @@ static int
 kalman_filter_result_aliases(const struct kalman_filter *filter,
 			     const float *result)
 {
-	return result == &filter->estimate ||
-	       result == &filter->covariance ||
-	       result == &filter->process_noise ||
-	       result == &filter->measurement_noise;
+	const unsigned char *filter_bytes;
+	const unsigned char *result_byte;
+	size_t filter_offset;
+	size_t result_offset;
+
+	filter_bytes = (const unsigned char *)(const void *)filter;
+	result_byte = (const unsigned char *)(const void *)result;
+
+	for (result_offset = 0; result_offset < sizeof(*result);
+	     result_offset++) {
+		for (filter_offset = 0; filter_offset < sizeof(*filter);
+		     filter_offset++) {
+			if (result_byte == filter_bytes + filter_offset)
+				return 1;
+		}
+
+		if (result_offset + 1 < sizeof(*result))
+			result_byte++;
+	}
+
+	return 0;
 }
 
 static enum kalman_filter_status
