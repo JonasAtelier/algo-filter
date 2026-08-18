@@ -1,65 +1,62 @@
 # ESP32 Complementary Filter
 
-A small, allocation-free Arduino ESP32 library for estimating an angle from
-gyroscope and accelerometer measurements. The core is plain C and has no
-Arduino or sensor-library dependencies.
+Estimates an angle from gyroscope and accelerometer measurements. Allocation-free,
+plain C core with no Arduino or sensor-library dependencies.
 
 ## Install
 
-Copy this directory into your Arduino `libraries` directory, then restart the
-Arduino IDE. Include the library with:
-
-```cpp
-#include <complementary_filter.h>
-```
+Copy this directory into your Arduino `libraries` directory and restart the IDE.
 
 ## Use
 
-Create a filter, initialize it, and call `complementary_filter_update()` for
-each sensor sample:
-
 ```cpp
+#include <complementary_filter.h>
+
 struct complementary_filter filter;
 
 complementary_filter_init(&filter, 0.0f, 0.98f);
 
 float angle = complementary_filter_update(&filter, gyro_rate_dps,
-					   accel_angle_deg, dt_s);
+                                          accel_angle_deg, dt_s);
 ```
 
-The arguments are:
+| Argument | Meaning |
+|---|---|
+| `initial_angle_deg` | Starting angle. The first accelerometer angle is a good value |
+| `alpha` | Gyroscope weight, clamped to `[0, 1]`. `0.98` is a starting point — tune for your noise and sample rate |
+| `gyro_rate_dps` | Angular velocity, degrees per second |
+| `accel_angle_deg` | Angle from the accelerometer, degrees |
+| `dt_s` | Elapsed time, seconds |
 
-- `initial_angle_deg`: starting angle in degrees. The first accelerometer angle
-  is usually a good startup value.
-- `alpha`: gyroscope weight, automatically clamped to `[0, 1]`. `0.98` is a
-  useful starting point, but should be tuned for sensor noise and sample rate.
-- `gyro_rate_dps`: angular velocity in degrees per second.
-- `accel_angle_deg`: angle calculated from the accelerometer, in degrees.
-- `dt_s`: elapsed time in seconds.
+`complementary_filter_reset()` sets a new angle without touching `alpha`.
 
-Call `complementary_filter_reset()` to set a new angle without changing
-`alpha`. An update with `dt_s <= 0` is ignored and returns the current angle.
-Gyroscope and accelerometer values must describe the same axis and use the
-same positive direction.
+Gyro and accelerometer values must describe the **same axis with the same
+positive direction**.
 
-All public inputs must be finite. Invalid update inputs leave the last finite
-angle unchanged. A non-finite initial angle becomes `0`, a non-finite reset
-angle is ignored, and a non-finite `alpha` uses the safe default `0.98`.
-Because the fields are public, each update also repairs a non-finite stored
-angle to `0` and revalidates `alpha`. Passing a null filter pointer is safe;
-update returns `0.0f`.
+### Invalid input
 
-Accelerometer correction follows the shortest angular path across the
-`-180`/`180` boundary. Gyroscope integration is not wrapped, so continuous
-motion remains intuitive and the returned angle is not restricted to a
-single revolution.
+All inputs must be finite; the filter degrades rather than faults.
 
-See `examples/basic_angle/basic_angle.ino` for an Arduino example and
-`docs/algorithm.md` for an explanation of the filter.
+- `dt_s <= 0` — ignored, returns the current angle
+- Invalid update input — last finite angle kept
+- Non-finite initial angle — becomes `0`
+- Non-finite reset angle — ignored
+- Non-finite `alpha` — falls back to `0.98`
+- Null filter pointer — safe, update returns `0.0f`
 
-## Native tests
+The fields are public, so each update also repairs a non-finite stored angle to
+`0` and revalidates `alpha`.
 
-The core can be tested on Linux without Arduino:
+Accelerometer correction takes the shortest path across the `-180`/`180`
+boundary. Gyroscope integration is **not** wrapped, so continuous motion stays
+intuitive and the angle is not confined to one revolution.
+
+See `examples/basic_angle/basic_angle.ino`, and `docs/algorithm.md` for how the
+filter works.
+
+## Tests
+
+Runs on Linux without Arduino:
 
 ```sh
 make -C test
