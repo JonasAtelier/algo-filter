@@ -82,13 +82,21 @@ the output untouched. The output pointer must not point into the filter object.
 ## Build
 
 ```sh
-cc -std=c99 -Wall -Wextra -Werror -pedantic -Isrc \
+make check    # run the tests
+make run      # run examples/basic.c
+```
+
+Or drop `include/kalman_filter.h` and `src/kalman_filter.c` straight into your
+own project — that is the whole install. Nothing here is tied to a platform:
+C99, `libm` only, no heap, no globals, no I/O.
+
+```sh
+cc -std=c99 -Wall -Wextra -Werror -pedantic -Iinclude \
   examples/basic.c src/kalman_filter.c -lm -o basic
 ```
 
-Same for `examples/custom_tuning.c`. C++ can use it through the header's
-`extern "C"`. Separate instances are independent; synchronise a shared one
-yourself.
+C++ can use it through the header's `extern "C"`, which `make check` verifies.
+Separate instances are independent; synchronise a shared one yourself.
 
 ## Algorithm
 

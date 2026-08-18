@@ -6,5 +6,5 @@
 .vscode/
 /basic
 /custom_tuning
-/examples/basic
-/examples/custom_tuning
+/test_kalman_filter
+/test_cpp_linkage
