@@ -42,9 +42,9 @@ the accelerometer faster.
 
 Use degrees for angles, degrees per second for gyroscope rate, and seconds for
 `dt`. Keep the sample interval accurate because gyroscope integration depends
-on it. Arduino `micros()` values are microseconds, so divide their unsigned
-difference by `1000000.0` to obtain seconds. Unsigned subtraction handles a
-single `micros()` counter wrap.
+on it. Microsecond counters are the usual source: divide the difference by
+`1000000.0` to get seconds, and subtract them as unsigned values so a single
+counter wrap still yields the right interval.
 
 Initialize the filter from the first accelerometer angle when possible. Both
 sensors must measure the same axis and use the same sign convention.

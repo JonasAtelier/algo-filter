@@ -1,16 +1,31 @@
-# ESP32 Complementary Filter
+# Complementary Filter
 
-Estimates an angle from gyroscope and accelerometer measurements. Allocation-free,
-plain C core with no Arduino or sensor-library dependencies.
+Estimates a tilt angle from a gyroscope and an accelerometer.
+
+Neither sensor can do it alone. A gyroscope is smooth and fast but **drifts** —
+integrate its small bias and your angle wanders away for good. An accelerometer
+always knows which way is down so it never drifts, but it is **noisy** and every
+bump shakes it. A complementary filter takes the steady part of one and the
+quiet part of the other: trust the gyroscope moment to moment, and lean on the
+accelerometer slowly to cancel the drift. One line of arithmetic, and the pair
+beats either sensor alone.
+
+`make run` shows it: after 5 seconds of a 2 deg/s gyro bias, the gyroscope alone
+is 10 degrees wrong and the filter is 1 degree off.
+
+- One header, one source file. Drop them into any C project.
+- C99 with `libm` and nothing else. No allocation, no globals, no I/O.
+- Nothing platform-specific — microcontroller, Linux, anywhere.
 
 ## Install
 
-Copy this directory into your Arduino `libraries` directory and restart the IDE.
+Copy `include/complementary_filter.h` and `src/complementary_filter.c` into your
+project and build them with your own sources. That is the whole install.
 
 ## Use
 
-```cpp
-#include <complementary_filter.h>
+```c
+#include "complementary_filter.h"
 
 struct complementary_filter filter;
 
@@ -51,15 +66,20 @@ Accelerometer correction takes the shortest path across the `-180`/`180`
 boundary. Gyroscope integration is **not** wrapped, so continuous motion stays
 intuitive and the angle is not confined to one revolution.
 
-See `examples/basic_angle/basic_angle.ino`, and `docs/algorithm.md` for how the
-filter works.
+### Choosing alpha
 
-## Tests
+`alpha` is how long you trust the gyroscope. Higher is smoother but lets more
+gyro bias through; lower corrects harder toward the accelerometer and lets more
+of its noise through. A constant gyro bias leaves a small steady error, on the
+order of `bias * dt * alpha / (1 - alpha)` — the degree the example ends on.
 
-Runs on Linux without Arduino:
+See `examples/angle.c`, and `docs/algorithm.md` for how the filter works.
+
+## Build
 
 ```sh
-make -C test
+make check    # run the tests, including the C++ linkage smoke test
+make run      # run examples/angle.c against simulated sensors
 ```
 
 ## License

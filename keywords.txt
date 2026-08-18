@@ -1,6 +1,0 @@
-complementary_filter	KEYWORD1
-complementary_filter_init	KEYWORD2
-complementary_filter_reset	KEYWORD2
-complementary_filter_update	KEYWORD2
-angle_deg	KEYWORD2
-alpha	KEYWORD2
