@@ -1,21 +1,17 @@
 # ESP32 Particle Filter
 
-A small, beginner-friendly Arduino ESP32 library for estimating one changing
-value with a particle filter. It is written in C, performs no dynamic
-allocation, and has no dependencies beyond the C math library.
+Estimates one changing value with a particle filter. Plain C, no dynamic
+allocation, no dependencies beyond the C math library.
 
-## Installation
+## Install
 
-Download or clone this repository into your Arduino libraries directory, then
-restart the Arduino IDE. Include the library with:
+Clone into your Arduino libraries directory and restart the IDE.
+
+## Use
 
 ```cpp
 #include <particle_filter.h>
-```
 
-## Minimal use
-
-```cpp
 static struct particle_filter filter;
 static float particles[100];
 static float weights[100];
@@ -29,39 +25,44 @@ void setup()
 
 void loop()
 {
-	float known_movement = 0.1f;
-	float sensor_measurement = read_sensor();
-
-	particle_filter_predict(&filter, known_movement);
-	particle_filter_update(&filter, sensor_measurement);
+	particle_filter_predict(&filter, 0.1f);              // known movement
+	particle_filter_update(&filter, read_sensor());      // measurement
 
 	float estimate = particle_filter_get_estimate(&filter);
 }
 ```
 
-The three arrays are owned by your application, must not overlap, and must
-remain valid while the filter is used. Their lengths must match
-`particle_count`. With 100 particles, they use about 1.2 KiB in total.
+Call `predict` before `update` for each sample. Weights are normalised and the
+filter resamples automatically when too few particles remain effective.
 
-The initial value, spread, movement, process noise, measurement noise, and
-sensor readings must all use the same unit. Spreads and noise values are
-standard deviations. `particle_filter_init()`, `particle_filter_reset()`,
-`particle_filter_predict()`, and `particle_filter_update()` return `0` on
-success and `-1` for invalid input.
+### `particle_filter_init()`
 
-Call predict before update for each new sensor sample. The filter automatically
-normalizes weights and resamples when too few particles remain effective.
+| Argument | Meaning |
+|---|---|
+| `particles`, `weights`, `scratch` | Caller-owned arrays |
+| `particle_count` | Length of all three |
+| `initial_value` | Starting estimate |
+| `initial_spread` | Standard deviation of the starting cloud |
+| `process_noise` | Standard deviation added per `predict` |
+| `measurement_noise` | Standard deviation assumed of the sensor |
+| `seed` | RNG seed |
 
-See the [complete Arduino example](examples/basic_filter/basic_filter.ino) and
-the [algorithm and tuning guide](docs/algorithm.md).
+The three arrays **must not overlap** and must stay valid for the filter's
+lifetime. At 100 particles they cost about 1.2 KiB total.
 
-## Host tests
+Initial value, spread, movement, both noise figures and your sensor readings must
+all use the **same unit**. Spreads and noise are standard deviations.
 
-Run the dependency-free C tests and C++ linkage check on Linux:
+`init`, `reset`, `predict` and `update` return `0` on success, `-1` on invalid
+input.
+
+See the [Arduino example](examples/basic_filter/basic_filter.ino) and the
+[algorithm and tuning guide](docs/algorithm.md).
+
+## Tests
 
 ```sh
 make -C test
-make -C test clean
 ```
 
 ## License
