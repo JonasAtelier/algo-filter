@@ -1,3 +1,9 @@
+<p align="center">
+  <img src="assets/filter.svg"
+       alt="A move, weigh and resample cycle running while a cloud of particles collapses onto the true value"
+       width="100%">
+</p>
+
 # Particle Filter
 
 Estimates one changing value from measurements too noisy to use directly.
