@@ -1,3 +1,9 @@
+<p align="center">
+  <img src="assets/filter.svg"
+       alt="A gyro and an accelerometer feeding a complementary filter while the gyro-only angle drifts away and the filter tracks the true angle"
+       width="100%">
+</p>
+
 # Complementary Filter
 
 Estimates a tilt angle from a gyroscope and an accelerometer.
