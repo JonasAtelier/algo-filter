@@ -1,3 +1,9 @@
+<p align="center">
+  <img src="assets/filter.svg"
+       alt="A predict and update cycle running while the filter estimate tracks the true value through a noisy measurement"
+       width="100%">
+</p>
+
 # Portable Scalar Kalman Filter
 
 Smooths one stream of noisy numbers while still following real change. A
