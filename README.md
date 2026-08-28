@@ -6,6 +6,12 @@
 
 # Particle Filter
 
+<p align="center">
+  <img alt="platform: portable C99" src="https://img.shields.io/badge/platform-portable%20C99-70e1b2?style=flat-square&labelColor=0d2238">
+  <img alt="language: C" src="https://img.shields.io/badge/language-C-70e1b2?style=flat-square&labelColor=0d2238">
+  <img alt="license: MIT" src="https://img.shields.io/badge/license-MIT-f2bd68?style=flat-square&labelColor=0d2238">
+</p>
+
 Estimates one changing value from measurements too noisy to use directly.
 
 Instead of one guess, it keeps a **cloud of guesses** — the particles. Each
