@@ -1,0 +1,9 @@
+*.a
+*.o
+*~
+.DS_Store
+.idea/
+.vscode/
+/pendulum
+/test_ekf_filter
+/test_cpp_linkage
