@@ -1,3 +1,5 @@
-/test/complementary_filter.o
-/test/test_complementary_filter
-/test/test_cpp_linkage
+/src/*.o
+/libcomplementary.a
+/angle
+/test_complementary_filter
+/test_cpp_linkage
