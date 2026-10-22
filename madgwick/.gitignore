@@ -1,0 +1,9 @@
+*.a
+*.o
+*~
+.DS_Store
+.idea/
+.vscode/
+/tilt
+/test_madgwick_filter
+/test_cpp_linkage
