@@ -102,6 +102,9 @@ Or drop `include/kalman_filter.h` and `src/kalman_filter.c` straight into your
 own project — that is the whole install. Nothing here is tied to a platform:
 C99, `libm` only, no heap, no globals, no I/O.
 
+With CMake, link the target `algo::kalman` instead; for ESP-IDF, use this
+folder as a component. See [Use one library](../README.md#use-one-library).
+
 ```sh
 cc -std=c99 -Wall -Wextra -Werror -pedantic -Iinclude \
   examples/basic.c src/kalman_filter.c -lm -o basic

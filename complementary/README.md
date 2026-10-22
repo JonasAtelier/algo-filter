@@ -34,6 +34,9 @@ is 10 degrees wrong and the filter is 1 degree off.
 Copy `include/complementary_filter.h` and `src/complementary_filter.c` into your
 project and build them with your own sources. That is the whole install.
 
+With CMake, link the target `algo::complementary` instead; for ESP-IDF, use
+this folder as a component. See [Use one library](../README.md#use-one-library).
+
 ## Use
 
 ```c

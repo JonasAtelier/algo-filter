@@ -52,6 +52,9 @@ make run      # a pendulum's rate from a noisy angle alone, then a heading
 Copy `include/ekf_filter.h` and `src/ekf_filter.c` into your project and build
 them with your own sources. That is the whole install.
 
+With CMake, link the target `algo::ekf` instead; for ESP-IDF, use this folder
+as a component. See [Use one library](../README.md#use-one-library).
+
 ## Describing your system
 
 You supply two functions. The filter supplies everything else.

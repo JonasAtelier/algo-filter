@@ -54,6 +54,9 @@ madgwick_filter_euler(&filter, &roll_deg, &pitch_deg, &yaw_deg);
 Copy `include/madgwick_filter.h` and `src/madgwick_filter.c` into your project
 and build them with your own sources. That is the whole install.
 
+With CMake, link the target `algo::madgwick` instead; for ESP-IDF, use this
+folder as a component. See [Use one library](../README.md#use-one-library).
+
 ## The one knob
 
 `beta` is how hard the accelerometer and magnetometer are allowed to pull the
