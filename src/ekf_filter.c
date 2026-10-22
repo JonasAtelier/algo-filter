@@ -248,8 +248,11 @@ static void ekf_numeric_model_jacobian(const struct ekf_filter *filter,
 	}
 }
 
+/* h, m and ctx come from the sensor being updated, which need not be the
+ * filter's own; the state and the step still come from the filter. */
 static void ekf_numeric_measure_jacobian(const struct ekf_filter *filter,
-					 double *H)
+					 ekf_filter_measure_fn h, int m,
+					 void *ctx, double *H)
 {
 	float plus[EKF_FILTER_MAX_STATES];
 	float minus[EKF_FILTER_MAX_STATES];
@@ -257,7 +260,6 @@ static void ekf_numeric_measure_jacobian(const struct ekf_filter *filter,
 	float h_minus[EKF_FILTER_MAX_MEAS];
 	double base = ekf_jacobian_step(filter);
 	int n = filter->n;
-	int m = filter->m;
 	int i, j;
 
 	for (j = 0; j < n; j++) {
@@ -272,8 +274,8 @@ static void ekf_numeric_measure_jacobian(const struct ekf_filter *filter,
 		minus[j] = (float)((double)filter->x[j] - step);
 		taken = (double)plus[j] - (double)minus[j];
 
-		filter->h(plus, h_plus, filter->ctx);
-		filter->h(minus, h_minus, filter->ctx);
+		h(plus, h_plus, ctx);
+		h(minus, h_minus, ctx);
 
 		for (i = 0; i < m; i++)
 			H[i * n + j] = taken != 0.0 ?
@@ -331,7 +333,11 @@ enum ekf_filter_status ekf_filter_init(struct ekf_filter *filter, int n, int m,
 	filter->H = NULL;
 	filter->ctx = NULL;
 	filter->jacobian_step = 0.0f;
+	filter->gate = 0.0f;
+	filter->residual = NULL;
+	filter->normalize = NULL;
 	filter->q_per_second = 0;
+	filter->nis = 0.0f;
 	filter->marker = EKF_FILTER_MARKER;
 
 	return EKF_FILTER_OK;
@@ -381,6 +387,12 @@ enum ekf_filter_status ekf_filter_predict(struct ekf_filter *filter,
 	if (!ekf_float_finite(next_x, n))
 		return EKF_FILTER_ERR_NOT_FINITE;
 
+	if (filter->normalize) {			/* never handed a NaN */
+		filter->normalize(next_x, filter->ctx);
+		if (!ekf_float_finite(next_x, n))
+			return EKF_FILTER_ERR_NOT_FINITE;
+	}
+
 	/* Times 1.0 is exact, so the default path is the old Q added per step. */
 	q_scale = filter->q_per_second ? (double)dt : 1.0;
 
@@ -401,8 +413,11 @@ enum ekf_filter_status ekf_filter_predict(struct ekf_filter *filter,
 	return EKF_FILTER_OK;
 }
 
-enum ekf_filter_status ekf_filter_update(struct ekf_filter *filter,
-					 const float *z, float *innovation)
+/* The update itself, for any sensor. The caller has checked the filter, z,
+ * the sensor and its gate; this checks what the callbacks hand back. */
+static enum ekf_filter_status ekf_update_core(struct ekf_filter *filter,
+					      const struct ekf_sensor *sensor,
+					      const float *z, float *innovation)
 {
 	double P[EKF_FILTER_NN] = { 0.0 };
 	double KH[EKF_FILTER_NN] = { 0.0 };
@@ -410,44 +425,47 @@ enum ekf_filter_status ekf_filter_update(struct ekf_filter *filter,
 	double T[EKF_FILTER_NN] = { 0.0 };
 	double next_P[EKF_FILTER_NN] = { 0.0 };
 	double H[EKF_FILTER_MN] = { 0.0 };
-	double HP[EKF_FILTER_MN] = { 0.0 };
+	double HP[EKF_FILTER_MAX_MEAS * (EKF_FILTER_MAX_STATES + 1)] = { 0.0 };
 	double K[EKF_FILTER_MN] = { 0.0 };
 	double KR[EKF_FILTER_MN] = { 0.0 };
 	double S[EKF_FILTER_MM] = { 0.0 };
 	double y[EKF_FILTER_MAX_MEAS] = { 0.0 };
 	double next_x[EKF_FILTER_MAX_STATES] = { 0.0 };
+	double nis = 0.0;
 	float jacobian[EKF_FILTER_MN];
 	float predicted[EKF_FILTER_MAX_MEAS];
-	enum ekf_filter_status status;
+	float residual[EKF_FILTER_MAX_MEAS];
+	float new_x[EKF_FILTER_MAX_STATES];
 	int n, m, i, j;
 
-	status = ekf_check_state(filter);
-	if (status != EKF_FILTER_OK)
-		return status;
-
-	if (!z)
-		return EKF_FILTER_ERR_NULL;
-
-	if (!filter->f || !filter->h)
-		return EKF_FILTER_ERR_INVALID_VALUE;
-
 	n = filter->n;
-	m = filter->m;
+	m = sensor->m;
 
 	if (!ekf_float_finite(z, m))
 		return EKF_FILTER_ERR_NOT_FINITE;
 
-	filter->h(filter->x, predicted, filter->ctx);
+	sensor->h(filter->x, predicted, sensor->ctx);
 	if (!ekf_float_finite(predicted, m))
 		return EKF_FILTER_ERR_NOT_FINITE;
 
-	if (filter->H) {
-		filter->H(filter->x, jacobian, filter->ctx);
+	if (sensor->residual) {
+		sensor->residual(z, predicted, residual, sensor->ctx);
+		if (!ekf_float_finite(residual, m))
+			return EKF_FILTER_ERR_NOT_FINITE;
+		for (i = 0; i < m; i++)
+			y[i] = (double)residual[i];
+	} else {
+		for (i = 0; i < m; i++)
+			y[i] = (double)z[i] - (double)predicted[i];
+	}
+
+	if (sensor->H) {
+		sensor->H(filter->x, jacobian, sensor->ctx);
 		if (!ekf_float_finite(jacobian, m * n))
 			return EKF_FILTER_ERR_NOT_FINITE;
 		ekf_to_double(jacobian, H, m * n);
 	} else {
-		ekf_numeric_measure_jacobian(filter, H);
+		ekf_numeric_measure_jacobian(filter, sensor->h, m, sensor->ctx, H);
 		if (!ekf_storable(H, m * n))
 			return EKF_FILTER_ERR_NOT_FINITE;
 	}
@@ -456,22 +474,47 @@ enum ekf_filter_status ekf_filter_update(struct ekf_filter *filter,
 	ekf_mat_mul(m, n, n, H, P, HP);			/* HP = H P,  m x n */
 	ekf_mat_mul_bt(m, n, m, HP, H, S);		/* S  = H P H'      */
 	for (i = 0; i < m * m; i++)
-		S[i] += (double)filter->R[i];
+		S[i] += (double)sensor->R[i];
 
 	if (!ekf_storable(S, m * m) || !ekf_storable(HP, m * n))
 		return EKF_FILTER_ERR_NUMERIC;
 
+	/* Widen HP to [HP | y], m x (n + 1), in place. Rows move up, so walk
+	 * from the last element down and nothing is overwritten unread. */
+	for (i = m - 1; i >= 0; i--) {
+		HP[i * (n + 1) + n] = y[i];
+		for (j = n - 1; j >= 0; j--)
+			HP[i * (n + 1) + j] = HP[i * n + j];
+	}
+
 	/* K = P H' S^-1, solved in place: the inverse is never formed. S and P
-	 * are symmetric, so (P H' S^-1)' = S^-1 H P, and HP becomes that. */
-	if (ekf_gj_solve(m, n, S, HP) != 0)
+	 * are symmetric, so (P H' S^-1)' = S^-1 H P, and HP becomes that. The
+	 * extra column comes out as S^-1 y for the NIS; Gauss-Jordan treats
+	 * every column alone, so it leaves K exactly as it was without it. */
+	if (ekf_gj_solve(m, n + 1, S, HP) != 0)
 		return EKF_FILTER_ERR_NUMERIC;
 
 	for (i = 0; i < n; i++)
 		for (j = 0; j < m; j++)
-			K[i * m + j] = HP[j * n + i];
+			K[i * m + j] = HP[j * (n + 1) + i];
 
 	for (i = 0; i < m; i++)
-		y[i] = (double)z[i] - (double)predicted[i];
+		nis += y[i] * HP[i * (n + 1) + n];	/* y' S^-1 y */
+
+	/* Too surprising for a float is infinitely surprising: a gate rejects
+	 * it, and with no gate the update goes ahead as it always did. This
+	 * also keeps the double to float cast below in range. */
+	if (!(nis <= (double)FLT_MAX && nis >= -(double)FLT_MAX))
+		nis = INFINITY;
+
+	/* Gated out: a verdict, not an error. Report it and leave x and P. */
+	if (sensor->gate > 0.0f && nis > (double)sensor->gate) {
+		filter->nis = (float)nis;
+		if (innovation)
+			for (i = 0; i < m; i++)
+				innovation[i] = (float)y[i];
+		return EKF_FILTER_REJECTED;
+	}
 
 	for (i = 0; i < n; i++) {
 		next_x[i] = (double)filter->x[i];
@@ -489,7 +532,7 @@ enum ekf_filter_status ekf_filter_update(struct ekf_filter *filter,
 	ekf_mat_mul(n, n, n, A, P, T);
 	ekf_mat_mul_bt(n, n, n, T, A, next_P);
 
-	ekf_to_double(filter->R, S, m * m);		/* S reused: R again */
+	ekf_to_double(sensor->R, S, m * m);		/* S reused: R again */
 	ekf_mat_mul(n, m, m, K, S, KR);
 	ekf_mat_mul_bt(n, m, n, KR, K, T);
 	for (i = 0; i < n * n; i++)
@@ -499,14 +542,88 @@ enum ekf_filter_status ekf_filter_update(struct ekf_filter *filter,
 	if (!ekf_storable(next_x, n) || !ekf_storable(next_P, n * n))
 		return EKF_FILTER_ERR_NUMERIC;
 
-	ekf_to_float(next_x, filter->x, n);
+	ekf_to_float(next_x, new_x, n);
+	if (filter->normalize) {
+		filter->normalize(new_x, filter->ctx);
+		if (!ekf_float_finite(new_x, n))
+			return EKF_FILTER_ERR_NOT_FINITE;
+	}
+
+	for (i = 0; i < n; i++)
+		filter->x[i] = new_x[i];
 	ekf_to_float(next_P, filter->P, n * n);
+	filter->nis = (float)nis;
 
 	if (innovation)
 		for (i = 0; i < m; i++)
 			innovation[i] = (float)y[i];
 
 	return EKF_FILTER_OK;
+}
+
+enum ekf_filter_status ekf_filter_update(struct ekf_filter *filter,
+					 const float *z, float *innovation)
+{
+	struct ekf_sensor own;
+	enum ekf_filter_status status;
+	int i;
+
+	status = ekf_check_state(filter);
+	if (status != EKF_FILTER_OK)
+		return status;
+
+	if (!z)
+		return EKF_FILTER_ERR_NULL;
+
+	if (!filter->f || !filter->h)
+		return EKF_FILTER_ERR_INVALID_VALUE;
+
+	/* A gate is a threshold on a squared distance. */
+	if (!isfinite(filter->gate))
+		return EKF_FILTER_ERR_NOT_FINITE;
+
+	if (filter->gate < 0.0f)
+		return EKF_FILTER_ERR_INVALID_VALUE;
+
+	/* The filter's own sensor. R was checked at init, and is not checked
+	 * for symmetry again here so an existing caller meets no new error. */
+	own.m = filter->m;
+	own.h = filter->h;
+	own.H = filter->H;
+	own.residual = filter->residual;
+	for (i = 0; i < filter->m * filter->m; i++)
+		own.R[i] = filter->R[i];
+	own.gate = filter->gate;
+	own.ctx = filter->ctx;
+
+	return ekf_update_core(filter, &own, z, innovation);
+}
+
+enum ekf_filter_status ekf_filter_update_sensor(struct ekf_filter *filter,
+						const struct ekf_sensor *sensor,
+						const float *z, float *innovation)
+{
+	enum ekf_filter_status status;
+
+	status = ekf_check_state(filter);
+	if (status != EKF_FILTER_OK)
+		return status;
+
+	if (!sensor || !z)
+		return EKF_FILTER_ERR_NULL;
+
+	if (!filter->f || !sensor->h ||
+	    sensor->m < 1 || sensor->m > EKF_FILTER_MAX_MEAS)
+		return EKF_FILTER_ERR_INVALID_VALUE;
+
+	if (!ekf_float_finite(sensor->R, sensor->m * sensor->m) ||
+	    !isfinite(sensor->gate))
+		return EKF_FILTER_ERR_NOT_FINITE;
+
+	if (!ekf_symmetric(sensor->R, sensor->m) || sensor->gate < 0.0f)
+		return EKF_FILTER_ERR_INVALID_VALUE;
+
+	return ekf_update_core(filter, sensor, z, innovation);
 }
 
 enum ekf_filter_status ekf_filter_reset(struct ekf_filter *filter,
@@ -534,6 +651,7 @@ enum ekf_filter_status ekf_filter_reset(struct ekf_filter *filter,
 		filter->x[i] = x0[i];
 	for (i = 0; i < n * n; i++)
 		filter->P[i] = P0[i];
+	filter->nis = 0.0f;
 
 	return EKF_FILTER_OK;
 }
