@@ -1,0 +1,9 @@
+*.a
+*.o
+*~
+.DS_Store
+.idea/
+.vscode/
+/motor
+/test_rls_filter
+/test_cpp_linkage
