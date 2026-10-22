@@ -486,6 +486,78 @@ static void test_reset(void)
 		    "reset leaves the model alone");
 }
 
+/* ---- 8: the legacy update is the update it was ----------------------- *
+ *
+ * Captured from the library before the sensor, gate, wrap and Q-rate work,
+ * with every new field at its init default. The relative tolerance leaves
+ * room for a compiler that contracts to FMA; on the reference host the
+ * values come out bit for bit. */
+
+static const double golden_cv[6] = {
+	0x1.905cbcp+5, 0x1.00e76ep+0,
+	0x1.462018p-8, 0x1.039bbap-11, 0x1.039bbap-11, 0x1.a59eb6p-14,
+};
+
+static const double golden_range_bearing[6] = {
+	0x1.40217ep+2, 0x1.807f38p+1,
+	0x1.27781ep-16, -0x1.d3ef58p-20, -0x1.d3ef58p-20, 0x1.2c20eap-16,
+};
+
+static void expect_golden(const struct ekf_filter *filter,
+			  const double *golden, const char *name)
+{
+	int i;
+
+	for (i = 0; i < 2; i++)
+		expect_within((double)filter->x[i], golden[i],
+			      1e-5 * fabs(golden[i]), name);
+	for (i = 0; i < 4; i++)
+		expect_within((double)filter->P[i], golden[2 + i],
+			      1e-5 * fabs(golden[2 + i]), name);
+}
+
+static void test_legacy_regression(void)
+{
+	struct ekf_filter filter;
+	struct observer eye;
+	const float x0[2] = { 5.6f, 3.8f };
+	const float P0[4] = { 2.0f, 0.0f, 0.0f, 2.0f };
+	const float Q[4] = { 1e-6f, 0.0f, 0.0f, 1e-6f };
+	const float R[4] = { 4e-4f, 0.0f, 0.0f, 1.6e-5f };
+	const float truth[2] = { 5.0f, 3.0f };
+	unsigned long seed = 12345UL;
+	float position = 0.0f;
+	float z[2];
+	int step;
+
+	setup_cv(&filter, 1);
+	for (step = 0; step < 500; step++) {
+		position += TRUE_VELOCITY * DT;
+		z[0] = position + MEAS_NOISE * jitter(&seed);
+		ekf_filter_predict(&filter, NULL, DT);
+		ekf_filter_update(&filter, z, NULL);
+	}
+	expect_golden(&filter, golden_cv, "constant velocity matches the old run");
+
+	ekf_filter_init(&filter, 2, 2, x0, P0, Q, R);
+	filter.f = target_model;
+	filter.h = range_bearing;
+	filter.ctx = &eye;
+	eye.y = 0.0;
+	seed = 7777UL;
+	for (step = 0; step < 400; step++) {
+		eye.x = 0.02 * (double)step;
+		ekf_filter_predict(&filter, NULL, DT);
+		range_bearing(truth, z, &eye);
+		z[0] += 0.02f * jitter(&seed);
+		z[1] += 0.004f * jitter(&seed);
+		ekf_filter_update(&filter, z, NULL);
+	}
+	expect_golden(&filter, golden_range_bearing,
+		      "range-bearing matches the old run");
+
+}
+
 int main(void)
 {
 	test_init_validates();
@@ -497,6 +569,7 @@ int main(void)
 	test_singular_and_bad_input();
 	test_innovation_output();
 	test_reset();
+	test_legacy_regression();
 
 	printf("PASS: %d checks\n", tests_run);
 	return EXIT_SUCCESS;
