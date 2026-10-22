@@ -1,0 +1,10 @@
+*.a
+*.o
+*~
+.DS_Store
+.idea/
+.vscode/
+/basic
+/custom_tuning
+/test_kalman_filter
+/test_cpp_linkage
