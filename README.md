@@ -37,7 +37,8 @@ Reach for this one when any of these is true.
 
 ```sh
 make check    # run the tests, including the C++ linkage smoke test
-make run      # recover a pendulum's rate from a noisy angle alone
+make run      # a pendulum's rate from a noisy angle alone, then a heading
+              # from a gyro, a spiky compass and a second sensor
 ```
 
 ```
@@ -117,11 +118,75 @@ scaled by the size of each state so it survives being stored back into a
 hold rather than the step that was asked for.
 
 Two things to watch in a nonlinear model. `h` must be continuous near the
-estimate, so an angle that wraps at `+/- pi` needs the wrap kept away from where
-you are working — the filter subtracts `h(x)` from `z` literally and does not
-know an angle from a distance. And the linearisation is only good near the
-current estimate, so a badly wrong `x0` with a confident `P0` can settle on the
-wrong answer.
+estimate, so an angle that wraps at `+/- pi` needs the help below — left alone,
+the filter subtracts `h(x)` from `z` literally and does not know an angle from
+a distance. And the linearisation is only good near the current estimate, so a
+badly wrong `x0` with a confident `P0` can settle on the wrong answer.
+
+### Angles
+
+Two optional callbacks, both `NULL` after `init`.
+
+- **`residual`** — `y = z - h(x)`, your way. A heading of `-3.1` measured
+  against a predicted `+3.1` is `0.08`, not `-6.2`; wrap it here and the filter
+  never sees the jump. It also decides what `innovation` hands back.
+- **`normalize`** — put a fresh state back in range. It runs on the new `x`
+  after every predict and every successful update, before it is stored, and
+  gets the filter's `ctx`.
+
+```c
+static void wrapped(const float *z, const float *predicted, float *y, void *ctx)
+{
+	(void)ctx;
+	y[0] = remainderf(z[0] - predicted[0], 6.2831853f);	/* into [-pi, pi] */
+}
+
+filter.residual = wrapped;
+filter.normalize = wrap_heading;	/* x[0] into (-pi, pi] */
+```
+
+`examples/heading.c` does both, across `+/- pi` several times.
+
+## More than one sensor
+
+The filter's own `m`, `h`, `H`, `R` and `ctx` are one sensor. Describe any other
+in a `struct ekf_sensor` — its own size, model, noise, residual, gate and `ctx` —
+and hand it to `ekf_filter_update_sensor`. Each sensor updates when its reading
+arrives; nothing has to be in step.
+
+```c
+struct ekf_sensor gps = { 0 };
+
+gps.m = 2;
+gps.h = gps_position;		/* gps.H NULL: numeric, filter.jacobian_step */
+gps.R[0] = 4.0f;
+gps.R[3] = 4.0f;
+gps.gate = 9.21f;
+
+ekf_filter_update_sensor(&filter, &gps, z, NULL);
+```
+
+The sensor is checked on every call: `m` from 1 to 4, `h` set, `R` finite and
+symmetric within `1e-6`, `gate` finite and not negative. Run with the filter's
+own values it gives exactly what `ekf_filter_update` gives.
+
+## Throwing out outliers
+
+Every update works out the normalised innovation squared, `nis = y' S^-1 y`
+with `S = H P H' + R` — how surprising this reading is, in units of its own
+expected spread. It falls out of the solve the update does anyway, and is left
+in `filter.nis` after every update that gets that far. A value too large for a
+`float` is stored as infinity, which any gate rejects.
+
+Set `gate` (on the filter for `ekf_filter_update`, on the sensor for
+`ekf_filter_update_sensor`) and a reading with `nis > gate` is refused:
+`EKF_FILTER_REJECTED`, `x` and `P` untouched, `nis` and `innovation` still
+written so you can log what was thrown out. `0` turns the gate off.
+
+The threshold is a chi-square quantile for `m` degrees of freedom: `9` is about
+3 sigma for one value, `9.21` keeps 99 % of good readings for two, `11.34` for
+three. Too tight a gate on a filter that has gone wrong will reject everything
+it needs to recover, so watch for a long run of rejections.
 
 ## Tuning Q and R
 
@@ -134,6 +199,11 @@ size sets how large `P` settles.
 | `Q` | The filter lags real change, or insists on a value the sensor keeps disagreeing with |
 | `R` | The estimate is jittery and chases the noise |
 | Both, together | Nothing changes. Scale one, not the pair |
+
+By default `Q` is added once per predict, so it is noise per step and a
+faster loop is a noisier model. Set `q_per_second` and it is a rate instead,
+added as `Q * dt`: tune it once and it holds when the loop period jitters or
+changes.
 
 Start with `R` from the sensor's datasheet noise, squared, and `Q` small — small
 enough that the filter is smooth, large enough that it still moves. Diagonal is
@@ -148,23 +218,28 @@ are guessing, tight if you know.
 | `ekf_filter_init` | Sizes, `x0`, `P0`, `Q` and `R`. Copies all four, then clears the callbacks for you to set |
 | `ekf_filter_predict` | Runs the model forward by `dt` and grows `P`. `u` may be `NULL` |
 | `ekf_filter_update` | Folds in one measurement `z`, Joseph form. `innovation` may be `NULL`, or receives `z - h(x)` |
+| `ekf_filter_update_sensor` | The same, for a `struct ekf_sensor` of its own size, model and noise |
 | `ekf_filter_reset` | New `x` and `P`, keeping `Q`, `R` and the model |
 
-Every call returns a status, and a call that returns anything but
-`EKF_FILTER_OK` changes nothing at all.
+Every call returns a status. A negative status is an error, and a call that
+returns one changes nothing at all. `EKF_FILTER_REJECTED` is positive: not an
+error but a verdict, and it changes `nis` and nothing else in the struct. Code
+that tests for `!= EKF_FILTER_OK` will treat a rejection as a failure, which is
+usually what you want; test `< 0` for errors alone.
 
 | Status | Meaning |
 |---|---|
+| `EKF_FILTER_REJECTED` | The gate threw the reading out. `x` and `P` untouched |
 | `EKF_FILTER_OK` | Succeeded |
 | `EKF_FILTER_ERR_NULL` | A required pointer was null |
 | `EKF_FILTER_ERR_NOT_FINITE` | A supplied value, or something a callback returned, was not finite |
-| `EKF_FILTER_ERR_INVALID_VALUE` | Bad size, missing `f` or `h`, `dt <= 0`, or a non-symmetric matrix |
+| `EKF_FILTER_ERR_INVALID_VALUE` | Bad size, missing `f` or `h`, `dt <= 0`, a non-symmetric matrix, or a negative `gate` |
 | `EKF_FILTER_ERR_NOT_INITIALIZED` | `init` was never called on this struct |
 | `EKF_FILTER_ERR_NUMERIC` | `H P H' + R` could not be inverted, or the result would not fit a `float` |
 
 Predict and update are independent. Run several predicts between measurements
 when the sensor is slower than the loop, or several updates in a row for
-several sensors, one `h` at a time.
+several sensors, one `struct ekf_sensor` each.
 
 ## Sizes and limits
 
@@ -172,8 +247,8 @@ several sensors, one `h` at a time.
 |---|---|
 | States `n` | 1 to 8 |
 | Measurements `m` | 1 to 4 |
-| Storage | `float` in the struct, 664 bytes on a 64-bit host, all of it yours |
-| Arithmetic | `double` on the stack inside every call, about 4 kB of frame |
+| Storage | `float` in the struct, 696 bytes on a 64-bit host, all of it yours; 112 per `struct ekf_sensor` |
+| Arithmetic | `double` on the stack inside every call, about 4.5 kB of frame for an update |
 | Layout | Row-major, packed to `n` and `m`, not to the maximum |
 
 The struct holds no pointer into itself and no hidden state, so it copies with
@@ -189,10 +264,11 @@ synchronise a shared one yourself. C++ can use it through the header's
   stays symmetric and positive over a long run — the tests hold it to that over
   10000 cycles. A square-root or UD filter would hold up better still in
   `float`, at more code than this library is trying to be.
-- **No outlier gating.** Every measurement you pass in is believed. If your
-  sensor drops spikes, compare the `innovation` against your own threshold and
-  skip the update yourself.
-- **No timing.** You supply `dt`, so a jittery loop is a jittery filter.
+- **No adaptive gating or tuning.** The NIS gate is a fixed threshold you
+  choose. Nothing re-estimates `Q` or `R`, and nothing re-opens a gate that has
+  rejected a filter's way back from a bad state.
+- **No timing.** You supply `dt`. With `q_per_second` a jittery loop is no
+  longer a mistuned filter, but `dt` still has to be the real one.
 
 ## License
 
