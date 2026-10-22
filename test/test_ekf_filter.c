@@ -558,6 +558,46 @@ static void test_legacy_regression(void)
 
 }
 
+/* ---- 16: q_per_second scales Q by dt --------------------------------- */
+
+static void test_q_per_second(void)
+{
+	struct ekf_filter rate;
+	struct ekf_filter step;
+	const float x0[2] = { 0.0f, 1.0f };
+	const float P0[4] = { 2.0f, 0.5f, 0.5f, 1.0f };
+	const float Q[4] = { 0.5f, 0.1f, 0.1f, 0.2f };
+	const float R[1] = { 0.25f };
+	const float dt = 0.25f;
+	double fpf[4];
+	int i;
+
+	ekf_filter_init(&rate, 2, 1, x0, P0, Q, R);
+	rate.f = cv_model;
+	rate.F = cv_model_jacobian;
+	rate.h = cv_measure;
+	step = rate;
+	rate.q_per_second = 1;
+
+	/* F = [1 dt; 0 1], so F P F' by hand. */
+	fpf[0] = 2.0 + 2.0 * (double)dt * 0.5 + (double)dt * (double)dt * 1.0;
+	fpf[1] = 0.5 + (double)dt * 1.0;
+	fpf[2] = fpf[1];
+	fpf[3] = 1.0;
+
+	expect_status(ekf_filter_predict(&rate, NULL, dt), EKF_FILTER_OK,
+		      "Q-rate predict");
+	expect_status(ekf_filter_predict(&step, NULL, dt), EKF_FILTER_OK,
+		      "Q-step predict");
+	for (i = 0; i < 4; i++) {
+		expect_within((double)rate.P[i],
+			      fpf[i] + (double)Q[i] * (double)dt, 1e-6,
+			      "q_per_second gives F P F' + Q dt");
+		expect_within((double)step.P[i], fpf[i] + (double)Q[i], 1e-6,
+			      "the default gives F P F' + Q");
+	}
+}
+
 int main(void)
 {
 	test_init_validates();
@@ -570,6 +610,7 @@ int main(void)
 	test_innovation_output();
 	test_reset();
 	test_legacy_regression();
+	test_q_per_second();
 
 	printf("PASS: %d checks\n", tests_run);
 	return EXIT_SUCCESS;

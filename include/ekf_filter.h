@@ -42,6 +42,7 @@ struct ekf_filter {
 	ekf_filter_measure_jacobian_fn H;    /* may be NULL */
 	void *ctx;                           /* handed to every callback */
 	float jacobian_step;                 /* finite-difference step; 0 selects 1e-4 */
+	int   q_per_second;                  /* nonzero: Q is a rate, added as Q * dt */
 	uint32_t marker;                     /* set by init, checked by every call */
 };
 
@@ -51,7 +52,8 @@ enum ekf_filter_status ekf_filter_init(struct ekf_filter *filter, int n, int m,
 				       const float *x0, const float *P0,
 				       const float *Q, const float *R);
 
-/* Time update: x = f(x, u, dt), P = F P F' + Q. dt must be finite and > 0. */
+/* Time update: x = f(x, u, dt), P = F P F' + Q (Q * dt with q_per_second).
+ * dt must be finite and > 0. */
 enum ekf_filter_status ekf_filter_predict(struct ekf_filter *filter, const float *u, float dt);
 
 /* Measurement update with z (m values). Joseph form, so P stays symmetric and positive.

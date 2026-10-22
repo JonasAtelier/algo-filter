@@ -331,6 +331,7 @@ enum ekf_filter_status ekf_filter_init(struct ekf_filter *filter, int n, int m,
 	filter->H = NULL;
 	filter->ctx = NULL;
 	filter->jacobian_step = 0.0f;
+	filter->q_per_second = 0;
 	filter->marker = EKF_FILTER_MARKER;
 
 	return EKF_FILTER_OK;
@@ -346,6 +347,7 @@ enum ekf_filter_status ekf_filter_predict(struct ekf_filter *filter,
 	float jacobian[EKF_FILTER_NN];
 	float next_x[EKF_FILTER_MAX_STATES];
 	enum ekf_filter_status status;
+	double q_scale;
 	int n, i;
 
 	status = ekf_check_state(filter);
@@ -379,11 +381,14 @@ enum ekf_filter_status ekf_filter_predict(struct ekf_filter *filter,
 	if (!ekf_float_finite(next_x, n))
 		return EKF_FILTER_ERR_NOT_FINITE;
 
+	/* Times 1.0 is exact, so the default path is the old Q added per step. */
+	q_scale = filter->q_per_second ? (double)dt : 1.0;
+
 	ekf_to_double(filter->P, P, n * n);
 	ekf_mat_mul(n, n, n, F, P, FP);			/* FP = F P        */
 	ekf_mat_mul_bt(n, n, n, FP, F, next_P);		/* next_P = F P F' */
 	for (i = 0; i < n * n; i++)
-		next_P[i] += (double)filter->Q[i];
+		next_P[i] += (double)filter->Q[i] * q_scale;
 	ekf_symmetrise(next_P, n);
 
 	if (!ekf_storable(next_P, n * n))
