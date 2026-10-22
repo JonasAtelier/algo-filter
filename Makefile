@@ -11,7 +11,7 @@ OBJ = src/ekf_filter.o
 
 CXX_AVAILABLE := $(shell command -v $(firstword $(CXX)) 2>/dev/null)
 
-all: $(LIB) pendulum test_ekf_filter
+all: $(LIB) pendulum heading test_ekf_filter
 
 $(LIB): $(OBJ)
 	$(AR) rcs $@ $^
@@ -20,6 +20,9 @@ src/ekf_filter.o: src/ekf_filter.c include/ekf_filter.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
 
 pendulum: examples/pendulum.c $(LIB)
+	$(CC) $(CFLAGS) $(CPPFLAGS) $< $(LIB) $(LDLIBS) -o $@
+
+heading: examples/heading.c $(LIB)
 	$(CC) $(CFLAGS) $(CPPFLAGS) $< $(LIB) $(LDLIBS) -o $@
 
 test_ekf_filter: test/test_ekf_filter.c $(LIB)
@@ -39,10 +42,11 @@ cpp-smoke:
 	@echo "SKIP: no C++ compiler"
 endif
 
-run: pendulum
+run: pendulum heading
 	./pendulum
+	./heading
 
 clean:
-	rm -f $(OBJ) $(LIB) pendulum test_ekf_filter test_cpp_linkage
+	rm -f $(OBJ) $(LIB) pendulum heading test_ekf_filter test_cpp_linkage
 
 .PHONY: all check cpp-smoke run clean
