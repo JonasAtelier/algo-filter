@@ -525,6 +525,9 @@ static void test_legacy_regression(void)
 	const float Q[4] = { 1e-6f, 0.0f, 0.0f, 1e-6f };
 	const float R[4] = { 4e-4f, 0.0f, 0.0f, 1.6e-5f };
 	const float truth[2] = { 5.0f, 3.0f };
+	const float zero_state = 0.0f;
+	const float unit = 1.0f;
+	const float huge = 1e20f;
 	unsigned long seed = 12345UL;
 	float position = 0.0f;
 	float z[2];
@@ -556,6 +559,414 @@ static void test_legacy_regression(void)
 	expect_golden(&filter, golden_range_bearing,
 		      "range-bearing matches the old run");
 
+	/* A reading so far out its NIS overflows a float. The old update took
+	 * it, and with no gate it still must: x halfway, P halved. */
+	ekf_filter_init(&filter, 1, 1, &zero_state, &unit, &zero_state, &unit);
+	filter.f = scalar_model;
+	filter.h = scalar_measure;
+	expect_status(ekf_filter_update(&filter, &huge, NULL), EKF_FILTER_OK,
+		      "an ungated update takes a NIS past FLT_MAX");
+	expect_within((double)filter.x[0], 5e19, 1e14, "and moves x halfway");
+	expect_within((double)filter.P[0], 0.5, 1e-7, "and halves P");
+	expect_true(isinf(filter.nis) && filter.nis > 0.0f,
+		    "and stores that NIS as infinity");
+
+	filter.gate = 9.0f;
+	expect_status(ekf_filter_update(&filter, &huge, NULL),
+		      EKF_FILTER_REJECTED, "a gate rejects an infinite NIS");
+}
+
+/* ---- 9: the filter's own sensor, passed as a sensor, changes nothing -- */
+
+static void cv_sensor(struct ekf_sensor *sensor)
+{
+	memset(sensor, 0, sizeof(*sensor));
+	sensor->m = 1;
+	sensor->h = cv_measure;
+	sensor->H = cv_measure_jacobian;
+	sensor->R[0] = 0.25f;
+}
+
+static void test_update_sensor_matches_update(void)
+{
+	struct ekf_filter plain;
+	struct ekf_filter sensed;
+	struct ekf_sensor sensor;
+	unsigned long seed = 4242UL;
+	float truth = 0.0f;
+	float z[1];
+	float a[1];
+	float b[1];
+	int step;
+
+	setup_cv(&plain, 1);
+	setup_cv(&sensed, 1);
+	cv_sensor(&sensor);
+
+	for (step = 0; step < 200; step++) {
+		truth += TRUE_VELOCITY * DT;
+		z[0] = truth + MEAS_NOISE * jitter(&seed);
+		ekf_filter_predict(&plain, NULL, DT);
+		ekf_filter_predict(&sensed, NULL, DT);
+		expect_status(ekf_filter_update(&plain, z, a), EKF_FILTER_OK,
+			      "own-sensor reference update");
+		expect_status(ekf_filter_update_sensor(&sensed, &sensor, z, b),
+			      EKF_FILTER_OK, "update_sensor with the same sensor");
+	}
+
+	expect_true(memcmp(plain.x, sensed.x, sizeof(plain.x)) == 0 &&
+		    memcmp(plain.P, sensed.P, sizeof(plain.P)) == 0,
+		    "update_sensor gives update's x and P bit for bit");
+	expect_true(a[0] == b[0] && plain.nis == sensed.nis,
+		    "and the same innovation and NIS");
+}
+
+/* ---- 10: two sensors of different size feed one filter --------------- */
+
+static void pair_measure(const float *x, float *z, void *ctx)
+{
+	(void)ctx;
+	z[0] = x[0];
+	z[1] = x[1];
+}
+
+static void test_two_sensors(void)
+{
+	struct ekf_filter filter;
+	struct ekf_sensor position;
+	struct ekf_sensor both;
+	unsigned long seed = 31337UL;
+	float truth = 0.0f;
+	float z[2];
+	int step;
+
+	setup_cv(&filter, 1);
+	cv_sensor(&position);
+	memset(&both, 0, sizeof(both));
+	both.m = 2;
+	both.h = pair_measure;			/* no H: numeric */
+	both.R[0] = 1.0f;
+	both.R[3] = 0.01f;
+
+	for (step = 0; step < 300; step++) {
+		truth += TRUE_VELOCITY * DT;
+		ekf_filter_predict(&filter, NULL, DT);
+
+		z[0] = truth + MEAS_NOISE * jitter(&seed);
+		expect_status(ekf_filter_update_sensor(&filter, &position, z, NULL),
+			      EKF_FILTER_OK, "the 1-value sensor updates");
+
+		if (step % 5 == 0) {
+			z[0] = truth + jitter(&seed);
+			z[1] = TRUE_VELOCITY + 0.1f * jitter(&seed);
+			expect_status(ekf_filter_update_sensor(&filter, &both, z,
+							       NULL),
+				      EKF_FILTER_OK, "the 2-value sensor updates");
+		}
+	}
+
+	expect_within((double)filter.x[0], (double)truth, (double)MEAS_NOISE,
+		      "fused position beats the noise");
+	expect_within((double)filter.x[1], (double)TRUE_VELOCITY,
+		      0.02 * (double)TRUE_VELOCITY,
+		      "fused velocity is within 2 percent");
+}
+
+/* ---- 11: a bad sensor, or a bad gate, is refused ---------------------- */
+
+static void test_sensor_validation(void)
+{
+	struct ekf_filter filter;
+	struct ekf_filter blank;
+	struct ekf_sensor sensor;
+	const float z[2] = { 1.0f, 1.0f };
+
+	setup_cv(&filter, 1);
+	memset(&blank, 0, sizeof(blank));
+	cv_sensor(&sensor);
+
+	expect_status(ekf_filter_update_sensor(NULL, &sensor, z, NULL),
+		      EKF_FILTER_ERR_NULL, "update_sensor rejects a null filter");
+	expect_status(ekf_filter_update_sensor(&blank, &sensor, z, NULL),
+		      EKF_FILTER_ERR_NOT_INITIALIZED,
+		      "update_sensor refuses an uninitialised filter");
+	expect_status(ekf_filter_update_sensor(&filter, NULL, z, NULL),
+		      EKF_FILTER_ERR_NULL, "update_sensor rejects a null sensor");
+	expect_status(ekf_filter_update_sensor(&filter, &sensor, NULL, NULL),
+		      EKF_FILTER_ERR_NULL, "update_sensor rejects a null z");
+
+	sensor.m = 0;
+	expect_status(ekf_filter_update_sensor(&filter, &sensor, z, NULL),
+		      EKF_FILTER_ERR_INVALID_VALUE, "sensor m = 0 is refused");
+	sensor.m = 5;
+	expect_status(ekf_filter_update_sensor(&filter, &sensor, z, NULL),
+		      EKF_FILTER_ERR_INVALID_VALUE, "sensor m = 5 is refused");
+
+	cv_sensor(&sensor);
+	sensor.h = NULL;
+	expect_status(ekf_filter_update_sensor(&filter, &sensor, z, NULL),
+		      EKF_FILTER_ERR_INVALID_VALUE, "a sensor needs h");
+
+	cv_sensor(&sensor);
+	sensor.R[0] = (float)NAN;
+	expect_status(ekf_filter_update_sensor(&filter, &sensor, z, NULL),
+		      EKF_FILTER_ERR_NOT_FINITE, "a NaN in sensor R is refused");
+
+	cv_sensor(&sensor);
+	sensor.m = 2;
+	sensor.h = pair_measure;
+	sensor.H = NULL;
+	sensor.R[0] = 1.0f;
+	sensor.R[1] = 0.5f;
+	sensor.R[2] = -0.5f;
+	sensor.R[3] = 1.0f;
+	expect_status(ekf_filter_update_sensor(&filter, &sensor, z, NULL),
+		      EKF_FILTER_ERR_INVALID_VALUE,
+		      "a non-symmetric sensor R is refused");
+
+	cv_sensor(&sensor);
+	sensor.gate = -1.0f;
+	expect_status(ekf_filter_update_sensor(&filter, &sensor, z, NULL),
+		      EKF_FILTER_ERR_INVALID_VALUE, "a negative gate is refused");
+	sensor.gate = (float)NAN;
+	expect_status(ekf_filter_update_sensor(&filter, &sensor, z, NULL),
+		      EKF_FILTER_ERR_NOT_FINITE, "a NaN gate is refused");
+	sensor.gate = (float)INFINITY;
+	expect_status(ekf_filter_update_sensor(&filter, &sensor, z, NULL),
+		      EKF_FILTER_ERR_NOT_FINITE, "an infinite gate is refused");
+
+	cv_sensor(&sensor);
+	filter.f = NULL;
+	expect_status(ekf_filter_update_sensor(&filter, &sensor, z, NULL),
+		      EKF_FILTER_ERR_INVALID_VALUE, "update_sensor needs f");
+
+	setup_cv(&filter, 1);
+	filter.gate = -1.0f;
+	expect_status(ekf_filter_update(&filter, z, NULL),
+		      EKF_FILTER_ERR_INVALID_VALUE,
+		      "update refuses a negative filter gate");
+	filter.gate = (float)NAN;
+	expect_status(ekf_filter_update(&filter, z, NULL),
+		      EKF_FILTER_ERR_NOT_FINITE,
+		      "update refuses a NaN filter gate");
+
+	expect_within((double)filter.x[0], 0.0, 0.0,
+		      "the refused calls left x alone");
+	expect_within((double)filter.P[0], 10.0, 0.0,
+		      "the refused calls left P alone");
+}
+
+/* ---- 12: an outlier is gated out, and nothing but nis moves ----------- */
+
+/* Counts its calls through ctx and leaves the state alone. */
+static void count_normalize(float *x, void *ctx)
+{
+	(void)x;
+	(*(int *)ctx)++;
+}
+
+static void test_gate_rejects(void)
+{
+	struct ekf_filter filter;
+	struct ekf_filter before;
+	struct ekf_sensor sensor;
+	float z[1];
+	float innovation[1];
+	double nis;
+	int calls = 0;
+	int step;
+
+	setup_cv(&filter, 1);
+	for (step = 0; step < 100; step++) {
+		z[0] = TRUE_VELOCITY * DT * (float)(step + 1);
+		ekf_filter_predict(&filter, NULL, DT);
+		ekf_filter_update(&filter, z, NULL);
+	}
+
+	filter.gate = 9.0f;
+	filter.normalize = count_normalize;
+	filter.ctx = &calls;			/* the CV callbacks ignore it */
+	memcpy(&before, &filter, sizeof(filter));
+	z[0] = filter.x[0] + 100.0f;		/* a spike */
+	nis = 100.0 * 100.0 / ((double)filter.P[0] + 0.25);
+
+	expect_status(ekf_filter_update(&filter, z, innovation),
+		      EKF_FILTER_REJECTED, "a spike past the gate is rejected");
+	before.nis = filter.nis;
+	expect_true(memcmp(&filter, &before, sizeof(filter)) == 0,
+		    "the rejected update changed nothing but nis");
+	expect_true(calls == 0, "a rejected update does not normalize");
+	expect_within((double)innovation[0], 100.0, 1e-4,
+		      "the rejected update still wrote the innovation");
+	expect_within((double)filter.nis, nis, 1e-6 * nis,
+		      "the rejected update still wrote nis");
+
+	z[0] = filter.x[0] + 0.1f;
+	expect_status(ekf_filter_update(&filter, z, NULL), EKF_FILTER_OK,
+		      "a measurement inside the gate is taken");
+
+	expect_true(calls == 1, "an accepted update does normalize");
+
+	cv_sensor(&sensor);
+	sensor.gate = 9.0f;
+	memcpy(&before, &filter, sizeof(filter));
+	z[0] = filter.x[0] - 100.0f;
+	expect_status(ekf_filter_update_sensor(&filter, &sensor, z, NULL),
+		      EKF_FILTER_REJECTED, "a sensor gate rejects too");
+	before.nis = filter.nis;
+	expect_true(memcmp(&filter, &before, sizeof(filter)) == 0,
+		    "and changes nothing but nis");
+	expect_true(calls == 1, "and does not normalize");
+}
+
+/* ---- 13: NIS against a 2 x 2 worked by hand -------------------------- */
+
+static void test_nis_by_hand(void)
+{
+	struct ekf_filter filter;
+	const float x0[2] = { 0.0f, 0.0f };
+	const float P0[4] = { 2.0f, 0.5f, 0.5f, 1.0f };
+	const float Q[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+	const float R[4] = { 0.5f, 0.1f, 0.1f, 0.25f };
+	const float z[2] = { 1.0f, -0.5f };
+	double s00, s01, s11, det, nis;
+
+	expect_status(ekf_filter_init(&filter, 2, 2, x0, P0, Q, R),
+		      EKF_FILTER_OK, "NIS init");
+	filter.f = target_model;
+	filter.h = pair_measure;
+	expect_within((double)filter.nis, 0.0, 0.0, "init clears nis");
+
+	/* S = P + R, and y' S^-1 y through the 2 x 2 adjugate. */
+	s00 = (double)P0[0] + (double)R[0];
+	s01 = (double)P0[1] + (double)R[1];
+	s11 = (double)P0[3] + (double)R[3];
+	det = s00 * s11 - s01 * s01;
+	nis = (s11 * (double)z[0] * (double)z[0] -
+	       2.0 * s01 * (double)z[0] * (double)z[1] +
+	       s00 * (double)z[1] * (double)z[1]) / det;
+
+	expect_status(ekf_filter_update(&filter, z, NULL), EKF_FILTER_OK,
+		      "NIS update");
+	expect_within((double)filter.nis, nis, 1e-6, "NIS matches y' S^-1 y");
+
+	expect_status(ekf_filter_reset(&filter, x0, P0), EKF_FILTER_OK,
+		      "NIS reset");
+	expect_within((double)filter.nis, 0.0, 0.0, "reset clears nis");
+}
+
+/* ---- 14: a heading measured across +/- pi does not jump 2 pi ---------- */
+
+#define PI 3.14159265358979323846
+
+static double wrap(double angle)
+{
+	while (angle > PI)
+		angle -= 2.0 * PI;
+	while (angle <= -PI)
+		angle += 2.0 * PI;
+
+	return angle;
+}
+
+static void wrapped_residual(const float *z, const float *predicted, float *y,
+			     void *ctx)
+{
+	(void)ctx;
+	y[0] = (float)wrap((double)z[0] - (double)predicted[0]);
+}
+
+static void wrap_heading(float *x, void *ctx)
+{
+	int *calls = (int *)ctx;
+
+	if (calls)
+		(*calls)++;
+	x[0] = (float)wrap((double)x[0]);
+}
+
+static void test_residual_wrap(void)
+{
+	struct ekf_filter filter;
+	const float x0[1] = { 3.0f };
+	const float P0[1] = { 0.1f };
+	const float Q[1] = { 1e-6f };
+	const float R[1] = { 0.01f };
+	const double truth = PI - 0.01;
+	unsigned long seed = 555UL;
+	float z[1];
+	float last;
+	int crossed = 0;
+	int step;
+
+	expect_status(ekf_filter_init(&filter, 1, 1, x0, P0, Q, R),
+		      EKF_FILTER_OK, "heading init");
+	filter.f = scalar_model;
+	filter.h = scalar_measure;
+	filter.residual = wrapped_residual;
+	filter.normalize = wrap_heading;
+
+	for (step = 0; step < 200; step++) {
+		z[0] = (float)wrap(truth + 0.05 * (double)jitter(&seed));
+		if (z[0] < 0.0f)
+			crossed++;
+
+		last = filter.x[0];
+		ekf_filter_predict(&filter, NULL, DT);
+		expect_status(ekf_filter_update(&filter, z, NULL), EKF_FILTER_OK,
+			      "heading update");
+		expect_true(fabs(wrap((double)filter.x[0] - (double)last)) < 0.2,
+			    "the heading never jumps");
+		expect_true(filter.x[0] > -PI && filter.x[0] <= PI,
+			    "the heading stays in (-pi, pi]");
+	}
+
+	expect_true(crossed > 20, "the measurements did cross -pi");
+	expect_within(wrap((double)filter.x[0] - truth), 0.0, 0.02,
+		      "the heading settles on the truth near +pi");
+}
+
+/* ---- 15: normalize runs after predict and after update ---------------- */
+
+static void spin(const float *x, const float *u, float dt, float *x_next,
+		 void *ctx)
+{
+	(void)u;
+	(void)ctx;
+	x_next[0] = x[0] + 1.0f * dt;
+}
+
+static void test_normalize_applied(void)
+{
+	struct ekf_filter filter;
+	const float x0[1] = { 3.1f };
+	const float P0[1] = { 0.1f };
+	const float Q[1] = { 1e-6f };
+	const float R[1] = { 0.01f };
+	const float z[1] = { -3.0f };
+	int calls = 0;
+
+	ekf_filter_init(&filter, 1, 1, x0, P0, Q, R);
+	filter.f = spin;
+	filter.h = scalar_measure;
+	filter.residual = wrapped_residual;
+	filter.normalize = wrap_heading;
+	filter.ctx = &calls;
+
+	expect_status(ekf_filter_predict(&filter, NULL, DT), EKF_FILTER_OK,
+		      "spin predict");
+	expect_within((double)filter.x[0], (double)(3.1f + 0.1f) - 2.0 * PI,
+		      1e-5, "predict wrapped 3.2 to 3.2 - 2 pi");
+	expect_true(calls == 1, "predict called normalize once, with ctx");
+
+	filter.x[0] = 3.13f;			/* updates towards -3.0 + 2 pi */
+	expect_status(ekf_filter_update(&filter, z, NULL), EKF_FILTER_OK,
+		      "spin update");
+	expect_true(calls == 2, "update called normalize once more");
+	expect_true(filter.x[0] > -PI && filter.x[0] <= PI,
+		    "the updated heading was wrapped");
+	expect_within(wrap((double)filter.x[0] - (-3.0)), 0.0, 0.1,
+		      "and moved towards the measurement");
 }
 
 /* ---- 16: q_per_second scales Q by dt --------------------------------- */
@@ -598,6 +1009,78 @@ static void test_q_per_second(void)
 	}
 }
 
+/* ---- 17: a callback that hands back NaN is refused, cleanly ---------- */
+
+static void nan_residual(const float *z, const float *predicted, float *y,
+			 void *ctx)
+{
+	(void)z;
+	(void)predicted;
+	(void)ctx;
+	y[0] = (float)NAN;
+}
+
+static void nan_normalize(float *x, void *ctx)
+{
+	(void)ctx;
+	x[0] = (float)NAN;
+}
+
+static void nan_model(const float *x, const float *u, float dt, float *x_next,
+		      void *ctx)
+{
+	(void)x;
+	(void)u;
+	(void)dt;
+	(void)ctx;
+	x_next[0] = (float)NAN;
+	x_next[1] = 0.0f;
+}
+
+static void test_callbacks_not_finite(void)
+{
+	struct ekf_filter filter;
+	struct ekf_filter before;
+	const float z[1] = { 1.0f };
+	int calls = 0;
+
+	setup_cv(&filter, 1);
+	ekf_filter_predict(&filter, NULL, DT);
+	ekf_filter_update(&filter, z, NULL);	/* a nonzero nis to keep */
+
+	filter.residual = nan_residual;
+	memcpy(&before, &filter, sizeof(filter));
+	expect_status(ekf_filter_update(&filter, z, NULL),
+		      EKF_FILTER_ERR_NOT_FINITE, "a NaN residual is refused");
+	expect_true(memcmp(&filter, &before, sizeof(filter)) == 0,
+		    "and changes nothing, nis included");
+
+	filter.residual = NULL;
+	filter.normalize = nan_normalize;
+	memcpy(&before, &filter, sizeof(filter));
+	expect_status(ekf_filter_update(&filter, z, NULL),
+		      EKF_FILTER_ERR_NOT_FINITE,
+		      "a NaN from normalize after update is refused");
+	expect_true(memcmp(&filter, &before, sizeof(filter)) == 0,
+		    "and changes nothing, nis included");
+	expect_status(ekf_filter_predict(&filter, NULL, DT),
+		      EKF_FILTER_ERR_NOT_FINITE,
+		      "a NaN from normalize after predict is refused");
+	expect_true(memcmp(&filter, &before, sizeof(filter)) == 0,
+		    "and changes nothing");
+
+	filter.f = nan_model;
+	filter.F = cv_model_jacobian;
+	filter.normalize = count_normalize;
+	filter.ctx = &calls;
+	memcpy(&before, &filter, sizeof(filter));
+	expect_status(ekf_filter_predict(&filter, NULL, DT),
+		      EKF_FILTER_ERR_NOT_FINITE, "a NaN from f is refused");
+	expect_true(calls == 0, "before normalize ever sees it");
+	expect_true(memcmp(&filter, &before, sizeof(filter)) == 0,
+		    "and changes nothing");
+}
+
 int main(void)
 {
 	test_init_validates();
@@ -610,7 +1093,15 @@ int main(void)
 	test_innovation_output();
 	test_reset();
 	test_legacy_regression();
+	test_update_sensor_matches_update();
+	test_two_sensors();
+	test_sensor_validation();
+	test_gate_rejects();
+	test_nis_by_hand();
+	test_residual_wrap();
+	test_normalize_applied();
 	test_q_per_second();
+	test_callbacks_not_finite();
 
 	printf("PASS: %d checks\n", tests_run);
 	return EXIT_SUCCESS;
