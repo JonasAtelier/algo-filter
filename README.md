@@ -15,6 +15,10 @@ Turn noisy sensor readings into estimates you can use. These six C99 libraries r
 | [particle](particle/) | Track one value using many weighted guesses when a simpler noise model fits poorly. | [track](particle/examples/track.c) · [API](particle/include/particle_filter.h) |
 | [rls](rls/) | Learn parameters such as friction from measurements as they arrive. | [motor](rls/examples/motor.c) · [API](rls/include/rls_filter.h) |
 
+[![A Kalman filter alternates prediction and measurement updates to smooth a noisy signal.](kalman/assets/filter.svg)](kalman/)
+
+*[Kalman filter example and API](kalman/).*
+
 ## Try the example
 
 From this repository’s root, use Make and a C99 compiler. No robot hardware is needed.
