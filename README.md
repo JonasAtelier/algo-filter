@@ -1,44 +1,41 @@
 # algo-filter
 
-<p align="center">
-  <img alt="platform: portable C99" src="https://img.shields.io/badge/platform-portable%20C99-70e1b2?style=flat-square&labelColor=0d2238">
-  <img alt="language: C" src="https://img.shields.io/badge/language-C-70e1b2?style=flat-square&labelColor=0d2238">
-  <img alt="license: MIT" src="https://img.shields.io/badge/license-MIT-f2bd68?style=flat-square&labelColor=0d2238">
-</p>
+Turn noisy sensor readings into estimates you can use. These six C99 libraries run on a computer or microcontroller.
 
-State estimation for robots — six small filters in portable C99, each one
-header and one `.c` file, no heap. Noisy sensors go in, numbers you can
-trust come out.
+## Try the example
 
-## Libraries
+From this repository’s root, use Make and a C99 compiler. No robot hardware is needed.
 
-| Library | What it does | Pick it when |
-|---|---|---|
-| [kalman](kalman) | Smooths one stream of noisy numbers while still following real change | one sensor, one value — a temperature, an ADC channel |
-| [ekf](ekf) | Extended Kalman filter, up to 8 coupled states | the states depend on each other, or the sensor measures them indirectly |
-| [madgwick](madgwick) | Gyro + accelerometer (+ magnetometer) into a full orientation | you need all three axes, or yaw |
-| [complementary](complementary) | Tilt angle from a gyroscope and an accelerometer | one angle, e.g. a balancing robot, and the least CPU |
-| [particle](particle) | Tracks one value with a cloud of weighted guesses | the noise is not Gaussian or the model is non-linear, and you can afford the CPU |
-| [rls](rls) | Recursive least squares: learns plant parameters online | you need a number nobody wrote down — `b0` for `adrc`, a motor's friction |
+```sh
+make -C kalman run
+```
 
-## Use one library
+The example prints two columns. Compare the raw readings with the smoother filtered estimates. [Example source](kalman/examples/basic.c)
 
-Every library stands on its own: no shared headers, nothing from one library
-needed by another. Take the one you need and leave the rest. Three ways in.
+## Choose a library
 
-**Copy the files.** `kalman/include/kalman_filter.h` and
-`kalman/src/kalman_filter.c`
-into your project, built with your own sources. That is the whole install.
+| Library | What it does |
+| --- | --- |
+| [kalman](kalman/) | Smooth a single stream of readings, such as temperature. |
+| [complementary](complementary/) | Estimate tilt from a gyroscope and an accelerometer. |
+| [madgwick](madgwick/) | Estimate 3D orientation from motion sensors, optionally with a magnetometer. |
+| [ekf](ekf/) | Track up to eight related quantities using a model of their motion and measurements. |
+| [particle](particle/) | Track one value using many weighted guesses when a simpler noise model fits poorly. |
+| [rls](rls/) | Learn parameters such as friction from measurements as they arrive. |
 
-**CMake.** Every library is its own target, `algo::<folder>`. Add just the
-folder you need:
+## Add it to your project
+
+For plain C, compile the source files in the library’s `src/` directory and add its `include/` directory to your compiler’s include path. For a CMake application named `app`, place this checkout inside your project and use the following lines.
 
 ```cmake
 add_subdirectory(algo-filter/kalman)
 target_link_libraries(app PRIVATE algo::kalman)
 ```
 
-or, without a copy in your tree:
+For ESP-IDF, add the library directory to `EXTRA_COMPONENT_DIRS` and its name to the consuming component’s `REQUIRES`. Select either the individual libraries or the entire repository to avoid duplicate symbols.
+
+<details>
+<summary>Fetch just this library from GitHub with CMake</summary>
 
 ```cmake
 include(FetchContent)
@@ -50,39 +47,6 @@ FetchContent_MakeAvailable(algo_kalman)
 target_link_libraries(app PRIVATE algo::kalman)
 ```
 
-`add_subdirectory(algo-filter)`, or FetchContent without `SOURCE_SUBDIR`, adds
-every library's target instead; link the ones you use. Examples and
-tests only build when this repo is the top-level project.
+</details>
 
-**ESP-IDF.** Point `EXTRA_COMPONENT_DIRS` at one library's folder. The
-component is named after the folder:
-
-```cmake
-# top-level CMakeLists.txt of your IDF project, before project()
-list(APPEND EXTRA_COMPONENT_DIRS path/to/algo-filter/kalman)
-```
-
-then `REQUIRES kalman` in your component's `idf_component_register()`.
-
-Pointing it at the repo root instead gives you **one** component holding
-every library, named after the folder (`algo-filter`): IDF does not look
-inside a folder that has its own `CMakeLists.txt`. Use one or the other,
-never both — every symbol would be defined twice.
-
-## Build and test
-
-```sh
-make check    # every library's own tests, stopping at the first failure
-make clean
-```
-
-Or with CMake and CTest. CTest runs the C tests only; the C++ linkage tests
-run under `make check`.
-
-```sh
-cmake -B build && cmake --build build -j2 && ctest --test-dir build
-```
-
-## License
-
-MIT. See [LICENSE](LICENSE).
+Run `make check` from the repository root to test the libraries. [MIT license](LICENSE)
